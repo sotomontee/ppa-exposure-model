@@ -15,14 +15,13 @@ import time
 
 from config import (
     PPA_DEFAULTS, PRICE_MODEL_DEFAULTS, SIMULATION_DEFAULTS,
-    CSA_DEFAULTS, RISK_DEFAULTS,
+    RISK_DEFAULTS,
 )
 from models.price_model import (PriceModelParams, simulate_prices, generate_forward_curve,
                                 generate_sample_market_curve)
 import pandas as pd
 from models.ppa import PPAContract, calculate_mtm_matrix
 from models.exposure import compute_exposure_profile, compute_exposure_at_time
-from models.collateral import CSAParams, compute_collateral_held, compute_net_exposure
 from analysis.sensitivity import sensitivity_sweep
 from analysis.validation import convergence_analysis, distribution_diagnostics
 from ai.commentary import generate_risk_commentary, prepare_metrics_for_ai
@@ -81,7 +80,7 @@ with st.sidebar:
     st.title("⚡ PPA Exposure Model")
     st.caption("Schwartz One-Factor Monte Carlo Engine")
     st.divider()
-    
+
     # PPA Contract
     with st.expander("📋 PPA Contract", expanded=True):
         fixed_price = st.number_input(
@@ -102,7 +101,7 @@ with st.sidebar:
             "Tenor (years)", options=[3, 5, 7, 10, 15],
             index=1,
         )
-    
+
     # Price Model
     with st.expander("📈 Price Model", expanded=True):
         spot_price = st.number_input(
@@ -131,7 +130,7 @@ with st.sidebar:
             help="Amplitude of seasonal component in log-price. "
                  "0.15 = ±15% seasonal swing.",
         )
-    
+
     # Forward Curve
     with st.expander("📉 Forward Curve", expanded=True):
         curve_mode = st.radio(
@@ -170,7 +169,6 @@ with st.sidebar:
                     df_curve = pd.read_csv(uploaded_file)
                     if "price" in df_curve.columns:
                         market_curve = df_curve["price"].values
-                        # Prepend spot if not included
                         if len(market_curve) > 0 and market_curve[0] != spot_price:
                             market_curve = np.concatenate([[spot_price], market_curve])
                         st.success(f"Loaded {len(market_curve)} price points.")
@@ -192,29 +190,7 @@ with st.sidebar:
             "Random seed", value=SIMULATION_DEFAULTS["random_seed"],
             min_value=0, max_value=99999, step=1,
         )
-    
-    # CSA Terms
-    with st.expander("🔒 CSA / Collateral", expanded=False):
-        threshold = st.number_input(
-            "Threshold (EUR)", value=CSA_DEFAULTS["threshold"],
-            min_value=0, max_value=50_000_000, step=500_000,
-            format="%d",
-        )
-        mta = st.number_input(
-            "MTA (EUR)", value=CSA_DEFAULTS["mta"],
-            min_value=0, max_value=5_000_000, step=100_000,
-            format="%d",
-        )
-        independent_amount = st.number_input(
-            "Independent Amount (EUR)", value=CSA_DEFAULTS["independent_amount"],
-            min_value=0, max_value=20_000_000, step=500_000,
-            format="%d",
-        )
-        mpor = st.selectbox(
-            "Margin period of risk (days)",
-            options=[5, 10, 15, 20], index=1,
-        )
-    
+
     # Risk Parameters
     with st.expander("📊 Risk Parameters", expanded=False):
         confidence_level = st.select_slider(
@@ -228,7 +204,7 @@ with st.sidebar:
             value=RISK_DEFAULTS["discount_rate"], step=0.005,
             format="%.3f",
         )
-    
+
     # AI Commentary
     with st.expander("🤖 AI Commentary", expanded=False):
         api_key = st.text_input(
@@ -236,13 +212,12 @@ with st.sidebar:
             help="Required for AI-generated risk commentary. "
                  "Your key is not stored.",
         )
-        # Also check Streamlit secrets
         if not api_key:
             try:
                 api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
             except Exception:
                 api_key = ""
-    
+
     st.divider()
     run_button = st.button("▶ Run simulation", type="primary", use_container_width=True)
 
@@ -252,12 +227,11 @@ with st.sidebar:
 def run_simulation(
     _fixed_price, _capacity_mw, _capacity_factor, _tenor_years,
     _spot_price, _long_run_mean, _volatility, _mean_reversion,
-    _seasonality_amplitude, _n_paths, _seed, _threshold, _mta,
-    _independent_amount, _mpor, _confidence_level, _discount_rate,
+    _seasonality_amplitude, _n_paths, _seed,
+    _confidence_level, _discount_rate,
     _market_curve_tuple=None,
 ):
     """Run the full simulation pipeline. Cached for performance."""
-    # Convert tuple back to array (tuples are hashable for caching)
     mkt_curve = np.array(_market_curve_tuple) if _market_curve_tuple is not None else None
 
     params = PriceModelParams(
@@ -274,43 +248,29 @@ def run_simulation(
         capacity_factor=_capacity_factor,
         tenor_years=_tenor_years,
     )
-    csa = CSAParams(
-        threshold=_threshold,
-        mta=_mta,
-        independent_amount=_independent_amount,
-        margin_period_of_risk=_mpor,
-    )
-    
+
     dt = 1.0 / 12  # Monthly steps
     n_steps = int(_tenor_years * 12)
-    
+
     # Simulate prices
     prices = simulate_prices(params, _n_paths, n_steps, dt, _seed)
-    
+
     # Forward curve
     fwd_curve = generate_forward_curve(params, n_steps, dt)
-    
+
     # MtM
     mtm = calculate_mtm_matrix(prices, contract, params, _discount_rate, dt)
-    
-    # Gross exposure
-    profile_gross = compute_exposure_profile(mtm, dt, _confidence_level)
-    
-    # Collateralized exposure
-    collateral = compute_collateral_held(mtm, csa, dt)
-    net_mtm = mtm - collateral
-    profile_net = compute_exposure_profile(net_mtm, dt, _confidence_level)
-    
+
+    # Exposure profile
+    profile = compute_exposure_profile(mtm, dt, _confidence_level)
+
     return {
         "prices": prices,
         "fwd_curve": fwd_curve,
         "mtm": mtm,
-        "net_mtm": net_mtm,
-        "profile_gross": profile_gross,
-        "profile_net": profile_net,
+        "profile": profile,
         "params": params,
         "contract": contract,
-        "csa": csa,
         "dt": dt,
         "n_steps": n_steps,
     }
@@ -320,13 +280,12 @@ def run_simulation(
 if run_button or "results" not in st.session_state:
     with st.spinner("Running Monte Carlo simulation..."):
         start = time.time()
-        # Convert market_curve to tuple for caching (arrays aren't hashable)
         mkt_tuple = tuple(market_curve) if market_curve is not None else None
         results = run_simulation(
             fixed_price, capacity_mw, capacity_factor, tenor_years,
             spot_price, long_run_mean, volatility, mean_reversion,
-            seasonality_amplitude, n_paths, seed, threshold, mta,
-            independent_amount, mpor, confidence_level, discount_rate,
+            seasonality_amplitude, n_paths, seed,
+            confidence_level, discount_rate,
             mkt_tuple,
         )
         elapsed = time.time() - start
@@ -339,8 +298,7 @@ if "results" not in st.session_state:
 
 results = st.session_state["results"]
 elapsed = st.session_state.get("elapsed", 0)
-profile_g = results["profile_gross"]
-profile_n = results["profile_net"]
+profile = results["profile"]
 
 
 # ── Tabs ─────────────────────────────────────────────────────────
@@ -356,23 +314,21 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # ── Tab 1: Executive Summary ────────────────────────────────────
 with tab1:
     st.header("Executive summary")
-    
+
     # Key metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Peak PFE (Gross)", format_eur(profile_g.peak_pfe),
-                   help=f"At t = {profile_g.peak_pfe_time:.1f} years")
+        st.metric("Peak PFE", format_eur(profile.peak_pfe),
+                   help=f"At t = {profile.peak_pfe_time:.1f} years")
     with col2:
-        st.metric("Peak PFE (Net)", format_eur(profile_n.peak_pfe),
-                   delta=f"-{(1 - profile_n.peak_pfe/max(profile_g.peak_pfe,1))*100:.0f}% vs gross",
-                   delta_color="normal")
+        st.metric("EPE", format_eur(profile.epe))
     with col3:
-        st.metric("EPE", format_eur(profile_g.epe))
+        st.metric("Effective EPE", format_eur(profile.effective_epe))
     with col4:
-        st.metric("Effective EPE", format_eur(profile_g.effective_epe))
-    
+        st.metric("Peak PFE Time", f"{profile.peak_pfe_time:.1f} years")
+
     st.divider()
-    
+
     # Contract summary
     col1, col2 = st.columns(2)
     with col1:
@@ -387,7 +343,7 @@ with tab1:
         | Tenor | {tenor_years} years |
         | Annual volume | {capacity_mw * capacity_factor * 8766:,.0f} MWh |
         """)
-    
+
     with col2:
         st.subheader("Model parameters")
         st.markdown(f"""
@@ -402,19 +358,19 @@ with tab1:
         | Paths | {n_paths:,} |
         | Runtime | {elapsed:.1f}s |
         """)
-    
+
     st.divider()
-    
+
     # AI Commentary
     st.subheader("🤖 AI risk commentary")
     if api_key:
         if st.button("Generate commentary", key="ai_btn"):
             with st.spinner("Generating AI analysis..."):
                 metrics = prepare_metrics_for_ai(
-                    profile_g, profile_n,
+                    profile, None,
                     vars(results["params"]),
                     vars(results["contract"]),
-                    vars(results["csa"]),
+                    {},
                 )
                 commentary = generate_risk_commentary(metrics, api_key)
                 st.markdown(commentary)
@@ -428,16 +384,12 @@ with tab1:
 # ── Tab 2: Price Simulation ─────────────────────────────────────
 with tab2:
     st.header("Price simulation")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        n_display = st.slider("Paths to display", 20, 200, 100, key="n_disp")
-    
+
     fig_paths = plot_price_paths(
-        results["prices"], results["dt"], n_display, results["fwd_curve"]
+        results["prices"], results["dt"], 100, results["fwd_curve"]
     )
     st.plotly_chart(fig_paths, use_container_width=True)
-    
+
     st.subheader("Price distribution at time point")
     dt = results["dt"]
     n_steps = results["n_steps"]
@@ -447,10 +399,10 @@ with tab2:
         key="price_time",
     )
     time_idx = min(int(time_point / dt), n_steps)
-    
+
     fig_dist = plot_price_distribution(results["prices"], time_idx, dt)
     st.plotly_chart(fig_dist, use_container_width=True)
-    
+
     # Summary stats
     prices_t = results["prices"][:, time_idx]
     col1, col2, col3, col4 = st.columns(4)
@@ -463,58 +415,49 @@ with tab2:
 # ── Tab 3: Exposure Profile ─────────────────────────────────────
 with tab3:
     st.header("Exposure profile")
-    
-    show_collateral = st.checkbox("Show collateralized exposure", value=True)
-    
-    fig_exp = plot_exposure_profile(
-        profile_g, confidence_level,
-        profile_n if show_collateral else None,
-    )
+
+    fig_exp = plot_exposure_profile(profile, confidence_level)
     st.plotly_chart(fig_exp, use_container_width=True)
-    
+
     # Detailed metrics
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Gross exposure**")
-        st.markdown(f"- Peak PFE: {format_eur(profile_g.peak_pfe)}")
-        st.markdown(f"- Peak time: {profile_g.peak_pfe_time:.1f} years")
-        st.markdown(f"- EPE: {format_eur(profile_g.epe)}")
-        st.markdown(f"- Eff. EPE: {format_eur(profile_g.effective_epe)}")
+        st.markdown("**Key metrics**")
+        st.markdown(f"- Peak PFE: {format_eur(profile.peak_pfe)}")
+        st.markdown(f"- Peak time: {profile.peak_pfe_time:.1f} years")
+        st.markdown(f"- EPE: {format_eur(profile.epe)}")
+        st.markdown(f"- Eff. EPE: {format_eur(profile.effective_epe)}")
     with col2:
-        st.markdown("**Collateralized exposure**")
-        st.markdown(f"- Peak PFE: {format_eur(profile_n.peak_pfe)}")
-        st.markdown(f"- Peak time: {profile_n.peak_pfe_time:.1f} years")
-        st.markdown(f"- EPE: {format_eur(profile_n.epe)}")
-        reduction = (1 - profile_n.peak_pfe / max(profile_g.peak_pfe, 1)) * 100
-        st.markdown(f"- PFE reduction: {reduction:.1f}%")
-    with col3:
-        st.markdown("**CSA terms**")
-        st.markdown(f"- Threshold: {format_eur(threshold)}")
-        st.markdown(f"- MTA: {format_eur(mta)}")
-        st.markdown(f"- Ind. Amount: {format_eur(independent_amount)}")
-        st.markdown(f"- MPOR: {mpor} days")
-    
+        st.markdown("**Interpretation**")
+        st.markdown(
+            f"The maximum potential credit exposure under the "
+            f"{confidence_level*100:.0f}% confidence level is "
+            f"{format_eur(profile.peak_pfe)}, occurring at "
+            f"t = {profile.peak_pfe_time:.1f} years. This represents "
+            f"the counterparty credit limit required for this PPA."
+        )
+
     st.divider()
     st.subheader("MtM distribution at time point")
-    
+
     time_point_exp = st.slider(
         "Select time (years)", 0.0, float(tenor_years),
-        value=profile_g.peak_pfe_time, step=float(dt),
+        value=profile.peak_pfe_time, step=float(dt),
         key="exp_time",
     )
     time_idx_exp = min(int(time_point_exp / dt), n_steps)
-    
+
     fig_mtm_dist = plot_exposure_distribution(
         results["mtm"], time_idx_exp, dt, fixed_price
     )
     st.plotly_chart(fig_mtm_dist, use_container_width=True)
-    
+
     # Distribution stats
     dist_stats = compute_exposure_at_time(results["mtm"], time_idx_exp)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Mean MtM", format_eur(dist_stats["mean"]))
     col2.metric("EE", format_eur(dist_stats["ee"]))
-    col3.metric(f"PFE {confidence_level*100:.0f}%", format_eur(dist_stats[f"pfe_99"]))
+    col3.metric(f"PFE {confidence_level*100:.0f}%", format_eur(dist_stats["pfe_99"]))
     col4.metric("% Positive", f"{dist_stats['pct_positive']:.1f}%")
 
 
@@ -523,60 +466,55 @@ with tab4:
     st.header("Sensitivity analysis")
     st.caption("Impact of key parameters on exposure metrics. "
                "Uses reduced path count (2,000) for speed.")
-    
-    sens_paths = 2000
-    sens_dt = 1.0 / 12
-    sens_n_steps = int(tenor_years * 12)
-    
+
     sens_param = st.selectbox(
         "Parameter to sweep",
-        options=["volatility", "mean_reversion", "fixed_price", "threshold"],
+        options=["volatility", "mean_reversion", "fixed_price"],
         format_func=lambda x: {
             "volatility": "Volatility (σ)",
             "mean_reversion": "Mean reversion (κ)",
             "fixed_price": "Fixed price (EUR/MWh)",
-            "threshold": "CSA Threshold (EUR)",
         }[x],
     )
-    
-    # Define sweep ranges
+
     sweep_ranges = {
         "volatility": np.arange(0.10, 0.85, 0.05),
         "mean_reversion": np.arange(0.2, 5.2, 0.2),
         "fixed_price": np.arange(30, 85, 5.0),
-        "threshold": np.arange(0, 15_000_001, 1_000_000),
     }
-    
+
     if st.button("Run sensitivity", key="sens_btn"):
         with st.spinner(f"Running sensitivity sweep on {sens_param}..."):
+            from models.collateral import CSAParams
+            dummy_csa = CSAParams(threshold=1e18, mta=1e18, independent_amount=0,
+                                  margin_period_of_risk=0)
             sens_result = sensitivity_sweep(
-                results["params"], results["contract"], results["csa"],
+                results["params"], results["contract"], dummy_csa,
                 sens_param, sweep_ranges[sens_param],
-                sens_paths, sens_n_steps, sens_dt,
+                2000, results["n_steps"], 1.0/12,
                 discount_rate, confidence_level, seed,
             )
             fig_sens = plot_sensitivity(sens_result)
             st.plotly_chart(fig_sens, use_container_width=True)
-            
-            # Interpretation
+
             pfe_range = sens_result.peak_pfe
-            st.info(
+            st.caption(
                 f"Peak PFE ranges from {format_eur(np.min(pfe_range))} to "
-                f"{format_eur(np.max(pfe_range))} across the sweep range. "
-                f"Ratio: {np.max(pfe_range)/max(np.min(pfe_range),1):.1f}x."
+                f"{format_eur(np.max(pfe_range))} across the sweep range "
+                f"({np.max(pfe_range)/max(np.min(pfe_range),1):.1f}x)."
             )
 
 
 # ── Tab 5: Model Validation ─────────────────────────────────────
 with tab5:
     st.header("Model validation")
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.subheader("Convergence analysis")
         st.caption("Does PFE stabilize as we add more simulation paths?")
-        
+
         if st.button("Run convergence test", key="conv_btn"):
             with st.spinner("Running convergence analysis (this may take a moment)..."):
                 conv_data = convergence_analysis(
@@ -587,36 +525,22 @@ with tab5:
                 )
                 fig_conv = plot_convergence(conv_data)
                 st.plotly_chart(fig_conv, use_container_width=True)
-                
-                # Convergence assessment
-                pfe_vals = conv_data["peak_pfe"]
-                last_two_diff = abs(pfe_vals[-1] - pfe_vals[-2]) / max(pfe_vals[-1], 1)
-                if last_two_diff < 0.02:
-                    st.success(
-                        f"✅ Model converged. Difference between last two path counts: "
-                        f"{last_two_diff:.1%}."
-                    )
-                else:
-                    st.warning(
-                        f"⚠️ Model may not be fully converged. Difference: "
-                        f"{last_two_diff:.1%}. Consider increasing path count."
-                    )
-    
+
     with col2:
         st.subheader("Distribution diagnostics")
         st.caption("Is the MtM distribution well-behaved?")
-        
+
         diag_time = st.slider(
             "Time point (years)", 0.0, float(tenor_years),
-            value=profile_g.peak_pfe_time, step=float(dt),
+            value=profile.peak_pfe_time, step=float(dt),
             key="diag_time",
         )
         diag_idx = min(int(diag_time / dt), n_steps)
-        
+
         if st.button("Run diagnostics", key="diag_btn"):
             try:
                 diag = distribution_diagnostics(results["mtm"], diag_idx)
-                
+
                 st.markdown(f"""
                 | Statistic | Value |
                 |---|---|
@@ -626,17 +550,9 @@ with tab5:
                 | Excess Kurtosis | {diag['excess_kurtosis']:.3f} |
                 | Jarque-Bera | {diag['jb_statistic']:.1f} |
                 """)
-                
+
                 fig_qq = plot_qq(diag)
                 st.plotly_chart(fig_qq, use_container_width=True)
-                
-                if abs(diag['excess_kurtosis']) > 1:
-                    st.info(
-                        "The distribution shows excess kurtosis (fat tails), "
-                        "which is expected for commodity-linked exposures. "
-                        "PFE estimates at high confidence levels may be "
-                        "sensitive to this."
-                    )
             except ImportError:
                 st.warning("scipy is required for distribution diagnostics.")
 
@@ -644,96 +560,85 @@ with tab5:
 # ── Tab 6: Methodology ──────────────────────────────────────────
 with tab6:
     st.header("Methodology")
-    
+
     st.markdown("""
     ### Price model: Schwartz one-factor with seasonality
-    
+
     The underlying power price follows a mean-reverting process in log-space
     (Ornstein-Uhlenbeck):
-    
+
     $$dX_t = \\kappa(\\mu(t) - X_t)\\,dt + \\sigma\\,dW_t$$
-    
+
     where $X_t = \\ln(S_t)$ and the seasonal long-run mean is:
-    
+
     $$\\mu(t) = \\mu_{base} + A \\sin(2\\pi(t - \\phi))$$
-    
+
     **Parameters:**
     - $\\kappa$: Mean-reversion speed (higher = faster reversion to equilibrium)
     - $\\mu_{base} = \\ln(\\bar{S})$: Log of long-run equilibrium price
     - $\\sigma$: Volatility of log-price
     - $A$: Seasonality amplitude
     - $\\phi$: Seasonality phase (0 = winter peak)
-    
+
     ### Discretization (Euler-Maruyama)
-    
+
     $$X_{t+\\Delta t} = X_t + \\kappa(\\mu(t) - X_t)\\Delta t + \\sigma\\sqrt{\\Delta t}\\,Z$$
-    
+
     where $Z \\sim N(0,1)$.
-    
+
     ### Forward price
-    
+
     Given spot $S_t$, the model-implied forward price for delivery at $T$ is:
-    
+
     $$F(t,T) = \\exp\\left(e^{-\\kappa\\tau} \\ln S_t + (1-e^{-\\kappa\\tau})\\mu(T) + \\frac{\\sigma^2}{4\\kappa}(1-e^{-2\\kappa\\tau})\\right)$$
-    
+
     where $\\tau = T - t$.
-    
+
+    ### Market-anchored simulation
+
+    When a market forward curve $F_{mkt}(0,T)$ is provided, the simulation generates
+    mean-reverting deviations around it:
+
+    $$dY_t = -\\kappa\\,Y_t\\,dt + \\sigma\\,dW_t, \\quad Y_0 = 0$$
+
+    The anchored price ensures $\\mathbb{E}[S_t] = F_{mkt}(0,t)$:
+
+    $$S_t = F_{mkt}(0,t) \\cdot \\exp\\left(Y_t - \\frac{\\text{Var}[Y_t]}{2}\\right)$$
+
     ### PPA valuation (generator perspective)
-    
+
     Mark-to-Market at time $t$:
-    
+
     $$\\text{MtM}(t) = \\sum_{i: t_i > t} (K - F(t, t_i)) \\cdot Q_i \\cdot DF(t, t_i)$$
-    
+
     where:
     - $K$ = fixed price (EUR/MWh)
     - $F(t, t_i)$ = model-implied forward at time $t$ for delivery at $t_i$
     - $Q_i$ = volume in period $i$ (MW × capacity factor × hours)
     - $DF(t, t_i) = e^{-r(t_i - t)}$ = discount factor
-    
+
     ### Exposure metrics
-    
+
     | Metric | Definition |
     |--------|-----------|
     | Expected Exposure (EE) | $\\mathbb{E}[\\max(\\text{MtM}(t), 0)]$ |
     | PFE | $\\text{Quantile}_{\\alpha}[\\max(\\text{MtM}(t), 0)]$ |
     | EPE | Time-weighted average of EE |
     | Effective EPE | Non-decreasing EPE (Basel definition) |
-    
-    ### Collateral modeling
-    
-    Under a CSA, collateral is called when MtM exceeds the threshold:
-    
-    $$C(t) = \\max\\left(\\text{MtM}(t - \\delta) - H, 0\\right) + IA$$
-    
-    subject to MTA filter, where $\\delta$ is the margin period of risk.
-    
-    Net exposure: $\\max(\\text{MtM}(t) - C(t), 0)$
-    
+
     ### Assumptions and limitations
-    
-    1. **Single factor**: The model uses one stochastic factor. In practice, 
+
+    1. **Single factor**: The model uses one stochastic factor. In practice,
        power prices are driven by multiple factors (gas, carbon, demand, renewables).
        A multi-factor model would better capture the term structure dynamics.
-    
-    2. **No jumps**: European power prices exhibit spikes (jumps) that are not 
-       captured by the continuous OU process. A jump-diffusion extension would 
+
+    2. **No jumps**: European power prices exhibit spikes (jumps) that are not
+       captured by the continuous OU process. A jump-diffusion extension would
        improve tail risk estimation.
-    
-    3. **Constant volatility**: Volatility is assumed constant. In reality, 
+
+    3. **Constant volatility**: Volatility is assumed constant. In reality,
        it varies with market conditions and delivery period.
-    
-    4. **Deterministic volumes**: Capacity factor is fixed. In practice, 
+
+    4. **Deterministic volumes**: Capacity factor is fixed. In practice,
        renewable generation is stochastic and correlated with prices.
-    
-    5. **Simplified collateral**: The model does not capture all CSA 
-       mechanics (e.g., eligible collateral types, rehypothecation, 
-       close-out netting across multiple contracts).
-    
-    ### References
-    
-    - Schwartz, E.S. (1997). *The Stochastic Behavior of Commodity Prices*. 
-      Journal of Finance, 52(3), 923-973.
-    - Gregory, J. (2020). *The xVA Challenge*. Wiley.
-    - Burger, M., Graeber, B., & Schindlmayr, G. (2014). 
-      *Managing Energy Risk*. Wiley.
     """)
