@@ -1,5 +1,3 @@
-"""Default configuration parameters for the PPA Exposure Model."""
-
 PPA_DEFAULTS = {
     "fixed_price": 55.0,
     "capacity_mw": 100.0,

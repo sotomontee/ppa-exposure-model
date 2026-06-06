@@ -1,16 +1,6 @@
-"""
-PPA Exposure Model — Streamlit Application
-
-A Monte Carlo-based counterparty exposure model for a fixed-for-float
-Power Purchase Agreement (PPA), built on the Schwartz one-factor
-mean-reverting price framework.
-
-Prototype for the Credit and Liquidity Risk team.
-Designed to be reviewed by internal audit and challenged by traders.
-"""
-
 import streamlit as st
 import numpy as np
+import pandas as pd
 import time
 
 from config import (
@@ -19,7 +9,6 @@ from config import (
 )
 from models.price_model import (PriceModelParams, simulate_prices, generate_forward_curve,
                                 generate_sample_market_curve)
-import pandas as pd
 from models.ppa import PPAContract, calculate_mtm_matrix
 from models.exposure import compute_exposure_profile, compute_exposure_at_time
 from analysis.sensitivity import sensitivity_sweep
@@ -32,7 +21,6 @@ from utils.charts import (
 )
 
 
-# ── Page config ──────────────────────────────────────────────────
 st.set_page_config(
     page_title="PPA Exposure Model",
     page_icon="⚡",
@@ -40,7 +28,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ───────────────────────────────────────────────────
 st.markdown("""
 <style>
     .metric-card {
@@ -75,13 +62,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── Sidebar ──────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚡ PPA Exposure Model")
     st.caption("Schwartz One-Factor Monte Carlo Engine")
     st.divider()
 
-    # PPA Contract
     with st.expander("📋 PPA Contract", expanded=True):
         fixed_price = st.number_input(
             "Fixed price (EUR/MWh)", value=PPA_DEFAULTS["fixed_price"],
@@ -102,7 +87,6 @@ with st.sidebar:
             index=1,
         )
 
-    # Price Model
     with st.expander("📈 Price Model", expanded=True):
         spot_price = st.number_input(
             "Current spot (EUR/MWh)", value=PRICE_MODEL_DEFAULTS["spot_price"],
@@ -131,7 +115,6 @@ with st.sidebar:
                  "0.15 = ±15% seasonal swing.",
         )
 
-    # Forward Curve
     with st.expander("📉 Forward Curve", expanded=True):
         curve_mode = st.radio(
             "Forward curve source",
@@ -179,7 +162,6 @@ with st.sidebar:
             else:
                 st.info("Upload a CSV file to use a custom forward curve.")
 
-    # Simulation
     with st.expander("⚙️ Simulation", expanded=False):
         n_paths = st.select_slider(
             "Number of paths",
@@ -191,7 +173,6 @@ with st.sidebar:
             min_value=0, max_value=99999, step=1,
         )
 
-    # Risk Parameters
     with st.expander("📊 Risk Parameters", expanded=False):
         confidence_level = st.select_slider(
             "PFE confidence level",
@@ -205,7 +186,6 @@ with st.sidebar:
             format="%.3f",
         )
 
-    # AI Commentary
     with st.expander("🤖 AI Commentary", expanded=False):
         api_key = st.text_input(
             "Anthropic API key", type="password",
@@ -222,7 +202,6 @@ with st.sidebar:
     run_button = st.button("▶ Run simulation", type="primary", use_container_width=True)
 
 
-# ── Run simulation ───────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def run_simulation(
     _fixed_price, _capacity_mw, _capacity_factor, _tenor_years,
@@ -231,7 +210,6 @@ def run_simulation(
     _confidence_level, _discount_rate,
     _market_curve_tuple=None,
 ):
-    """Run the full simulation pipeline. Cached for performance."""
     mkt_curve = np.array(_market_curve_tuple) if _market_curve_tuple is not None else None
 
     params = PriceModelParams(
@@ -249,19 +227,12 @@ def run_simulation(
         tenor_years=_tenor_years,
     )
 
-    dt = 1.0 / 12  # Monthly steps
+    dt = 1.0 / 12
     n_steps = int(_tenor_years * 12)
 
-    # Simulate prices
     prices = simulate_prices(params, _n_paths, n_steps, dt, _seed)
-
-    # Forward curve
     fwd_curve = generate_forward_curve(params, n_steps, dt)
-
-    # MtM
     mtm = calculate_mtm_matrix(prices, contract, params, _discount_rate, dt)
-
-    # Exposure profile
     profile = compute_exposure_profile(mtm, dt, _confidence_level)
 
     return {
@@ -276,7 +247,6 @@ def run_simulation(
     }
 
 
-# Run on button click or first load
 if run_button or "results" not in st.session_state:
     with st.spinner("Running Monte Carlo simulation..."):
         start = time.time()
@@ -301,7 +271,6 @@ elapsed = st.session_state.get("elapsed", 0)
 profile = results["profile"]
 
 
-# ── Tabs ─────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Executive Summary",
     "📈 Price Simulation",
@@ -311,11 +280,9 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📖 Methodology",
 ])
 
-# ── Tab 1: Executive Summary ────────────────────────────────────
 with tab1:
     st.header("Executive summary")
 
-    # Key metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Peak PFE", format_eur(profile.peak_pfe),
@@ -329,7 +296,6 @@ with tab1:
 
     st.divider()
 
-    # Contract summary
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Contract parameters")
@@ -361,7 +327,6 @@ with tab1:
 
     st.divider()
 
-    # AI Commentary
     st.subheader("🤖 AI risk commentary")
     if api_key:
         if st.button("Generate commentary", key="ai_btn"):
@@ -381,7 +346,6 @@ with tab1:
         )
 
 
-# ── Tab 2: Price Simulation ─────────────────────────────────────
 with tab2:
     st.header("Price simulation")
 
@@ -403,7 +367,6 @@ with tab2:
     fig_dist = plot_price_distribution(results["prices"], time_idx, dt)
     st.plotly_chart(fig_dist, use_container_width=True)
 
-    # Summary stats
     prices_t = results["prices"][:, time_idx]
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Mean", f"€{np.mean(prices_t):.1f}/MWh")
@@ -412,14 +375,12 @@ with tab2:
     col4.metric("95th pctl", f"€{np.percentile(prices_t, 95):.1f}/MWh")
 
 
-# ── Tab 3: Exposure Profile ─────────────────────────────────────
 with tab3:
     st.header("Exposure profile")
 
     fig_exp = plot_exposure_profile(profile, confidence_level)
     st.plotly_chart(fig_exp, use_container_width=True)
 
-    # Detailed metrics
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Key metrics**")
@@ -452,7 +413,6 @@ with tab3:
     )
     st.plotly_chart(fig_mtm_dist, use_container_width=True)
 
-    # Distribution stats
     dist_stats = compute_exposure_at_time(results["mtm"], time_idx_exp)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Mean MtM", format_eur(dist_stats["mean"]))
@@ -461,7 +421,6 @@ with tab3:
     col4.metric("% Positive", f"{dist_stats['pct_positive']:.1f}%")
 
 
-# ── Tab 4: Sensitivity Analysis ─────────────────────────────────
 with tab4:
     st.header("Sensitivity analysis")
     st.caption("Impact of key parameters on exposure metrics. "
@@ -505,7 +464,6 @@ with tab4:
             )
 
 
-# ── Tab 5: Model Validation ─────────────────────────────────────
 with tab5:
     st.header("Model validation")
 
@@ -557,88 +515,103 @@ with tab5:
                 st.warning("scipy is required for distribution diagnostics.")
 
 
-# ── Tab 6: Methodology ──────────────────────────────────────────
 with tab6:
     st.header("Methodology")
 
     st.markdown("""
-    ### Price model: Schwartz one-factor with seasonality
+    ### 1. What this model does
 
-    The underlying power price follows a mean-reverting process in log-space
-    (Ornstein-Uhlenbeck):
+    This tool estimates the **counterparty credit exposure** arising from a
+    fixed-for-float Power Purchase Agreement (PPA) over its full lifetime.
+    It answers: *"If this counterparty defaults at any point during the
+    contract, how much could we lose?"*
+
+    The model simulates thousands of possible future power price scenarios
+    using Monte Carlo simulation, revalues the PPA under each scenario at
+    monthly intervals, and extracts the exposure profile — the range of
+    potential credit losses over time.
+
+    ---
+
+    ### 2. Price dynamics
+
+    Power prices don't behave like equities — they tend to **revert to an
+    equilibrium level** driven by supply and demand fundamentals, and they
+    exhibit **seasonal patterns** (higher in winter, lower in summer in
+    European markets).
+
+    The model captures both features using the Schwartz one-factor framework,
+    a standard approach in energy risk:
 
     $$dX_t = \\kappa(\\mu(t) - X_t)\\,dt + \\sigma\\,dW_t$$
 
-    where $X_t = \\ln(S_t)$ and the seasonal long-run mean is:
+    where $X_t = \\ln(S_t)$, $\\kappa$ controls how fast prices revert,
+    $\\mu(t)$ is the seasonal equilibrium level, and $\\sigma$ is volatility.
+    The simulation uses monthly time steps with 10,000 paths by default.
 
-    $$\\mu(t) = \\mu_{base} + A \\sin(2\\pi(t - \\phi))$$
+    ---
 
-    **Parameters:**
-    - $\\kappa$: Mean-reversion speed (higher = faster reversion to equilibrium)
-    - $\\mu_{base} = \\ln(\\bar{S})$: Log of long-run equilibrium price
-    - $\\sigma$: Volatility of log-price
-    - $A$: Seasonality amplitude
-    - $\\phi$: Seasonality phase (0 = winter peak)
+    ### 3. Forward curve
 
-    ### Discretization (Euler-Maruyama)
+    The model supports two modes:
 
-    $$X_{t+\\Delta t} = X_t + \\kappa(\\mu(t) - X_t)\\Delta t + \\sigma\\sqrt{\\Delta t}\\,Z$$
+    **Model-implied** — the forward curve is derived analytically from the
+    price model parameters. Useful for scenario analysis and stress testing.
 
-    where $Z \\sim N(0,1)$.
+    **Market-anchored** — the user provides an observed forward curve (e.g.,
+    from Nord Pool or EEX), and the simulation generates stochastic deviations
+    around it while ensuring that the expected simulated price at each tenor
+    matches the market forward:
 
-    ### Forward price
+    $$\\mathbb{E}[S_t] = F_{mkt}(0, t) \\quad \\forall \\, t$$
 
-    Given spot $S_t$, the model-implied forward price for delivery at $T$ is:
+    This is the standard production approach — it separates the market's
+    view of fair value (the forward curve) from the model's role (generating
+    the uncertainty around it).
 
-    $$F(t,T) = \\exp\\left(e^{-\\kappa\\tau} \\ln S_t + (1-e^{-\\kappa\\tau})\\mu(T) + \\frac{\\sigma^2}{4\\kappa}(1-e^{-2\\kappa\\tau})\\right)$$
+    ---
 
-    where $\\tau = T - t$.
+    ### 4. PPA valuation
 
-    ### Market-anchored simulation
-
-    When a market forward curve $F_{mkt}(0,T)$ is provided, the simulation generates
-    mean-reverting deviations around it:
-
-    $$dY_t = -\\kappa\\,Y_t\\,dt + \\sigma\\,dW_t, \\quad Y_0 = 0$$
-
-    The anchored price ensures $\\mathbb{E}[S_t] = F_{mkt}(0,t)$:
-
-    $$S_t = F_{mkt}(0,t) \\cdot \\exp\\left(Y_t - \\frac{\\text{Var}[Y_t]}{2}\\right)$$
-
-    ### PPA valuation (generator perspective)
-
-    Mark-to-Market at time $t$:
+    The PPA is modeled from the **generator's perspective** (fixed price
+    receiver). At each time step, the Mark-to-Market is the present value
+    of all remaining cash flows:
 
     $$\\text{MtM}(t) = \\sum_{i: t_i > t} (K - F(t, t_i)) \\cdot Q_i \\cdot DF(t, t_i)$$
 
-    where:
-    - $K$ = fixed price (EUR/MWh)
-    - $F(t, t_i)$ = model-implied forward at time $t$ for delivery at $t_i$
-    - $Q_i$ = volume in period $i$ (MW × capacity factor × hours)
-    - $DF(t, t_i) = e^{-r(t_i - t)}$ = discount factor
+    where $K$ is the fixed price, $F(t, t_i)$ is the model-implied forward
+    (consistent with information at time $t$, not realized future prices),
+    $Q_i$ is the delivered volume, and $DF$ is the discount factor.
 
-    ### Exposure metrics
+    Positive MtM means the counterparty owes us — this is where credit
+    exposure exists. Negative MtM means we owe them — no credit risk.
 
-    | Metric | Definition |
-    |--------|-----------|
-    | Expected Exposure (EE) | $\\mathbb{E}[\\max(\\text{MtM}(t), 0)]$ |
-    | PFE | $\\text{Quantile}_{\\alpha}[\\max(\\text{MtM}(t), 0)]$ |
-    | EPE | Time-weighted average of EE |
-    | Effective EPE | Non-decreasing EPE (Basel definition) |
+    ---
 
-    ### Assumptions and limitations
+    ### 5. Exposure metrics
 
-    1. **Single factor**: The model uses one stochastic factor. In practice,
-       power prices are driven by multiple factors (gas, carbon, demand, renewables).
-       A multi-factor model would better capture the term structure dynamics.
+    | Metric | What it tells you | Used for |
+    |--------|-------------------|----------|
+    | **EE** (Expected Exposure) | Average credit exposure at each point in time | Portfolio monitoring |
+    | **PFE** (Potential Future Exposure) | Worst-case exposure at a given confidence level (e.g., 99%) | Credit limit setting |
+    | **EPE** (Expected Positive Exposure) | Time-weighted average of EE over the contract life | CVA calculation |
+    | **Effective EPE** | Non-decreasing version of EPE | Regulatory capital (Basel III / SA-CCR) |
+    | **Peak PFE** | Maximum PFE across all time horizons | Credit limit allocation |
 
-    2. **No jumps**: European power prices exhibit spikes (jumps) that are not
-       captured by the continuous OU process. A jump-diffusion extension would
-       improve tail risk estimation.
+    The **Peak PFE** is the key output for credit risk management — it represents
+    the maximum counterparty credit limit required to support this PPA.
 
-    3. **Constant volatility**: Volatility is assumed constant. In reality,
-       it varies with market conditions and delivery period.
+    ---
 
-    4. **Deterministic volumes**: Capacity factor is fixed. In practice,
-       renewable generation is stochastic and correlated with prices.
+    ### 6. Known limitations and future extensions
+
+    | Limitation | Impact | Potential extension |
+    |------------|--------|---------------------|
+    | Single stochastic factor | Cannot capture decorrelation between short and long-term prices | Schwartz-Smith two-factor model |
+    | No price spikes (jumps) | Underestimates short-horizon tail risk | Jump-diffusion (Merton / Kou) |
+    | Constant volatility | Vol is assumed flat across tenors and time | Stochastic volatility or term structure of vol |
+    | Deterministic generation | Capacity factor is fixed; real wind/solar output is stochastic | Correlated volume-price simulation |
+
+    These are documented as areas for incremental extension. The current
+    prototype provides a methodologically sound foundation.
     """)
