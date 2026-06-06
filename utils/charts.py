@@ -230,40 +230,29 @@ def plot_sensitivity(result) -> go.Figure:
     """Plot sensitivity analysis results."""
     fig = make_subplots(rows=1, cols=2,
                         subplot_titles=("Peak PFE", "EPE"))
-    
+
     # Peak PFE
     fig.add_trace(go.Scatter(
         x=result.parameter_values, y=result.peak_pfe, mode="lines+markers",
         line=dict(color=COLORS["positive"], width=2),
-        marker=dict(size=6), name="Gross",
+        marker=dict(size=6), name="Peak PFE",
     ), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        x=result.parameter_values, y=result.peak_pfe_collateralized,
-        mode="lines+markers",
-        line=dict(color=COLORS["positive"], width=2, dash="dash"),
-        marker=dict(size=6), name="Collateralized",
-    ), row=1, col=1)
-    
+
     # EPE
     fig.add_trace(go.Scatter(
         x=result.parameter_values, y=result.epe, mode="lines+markers",
         line=dict(color=COLORS["negative"], width=2),
-        marker=dict(size=6), name="Gross", showlegend=False,
+        marker=dict(size=6), name="EPE",
     ), row=1, col=2)
-    fig.add_trace(go.Scatter(
-        x=result.parameter_values, y=result.epe_collateralized,
-        mode="lines+markers",
-        line=dict(color=COLORS["negative"], width=2, dash="dash"),
-        marker=dict(size=6), name="Collateralized", showlegend=False,
-    ), row=1, col=2)
-    
+
     # Format parameter name for display
     display_name = result.parameter_name.replace("_", " ").title()
-    
+
     fig.update_layout(
         **LAYOUT_DEFAULTS,
         title=f"Sensitivity to {display_name}",
         height=400,
+        showlegend=False,
     )
     fig.update_xaxes(title_text=display_name, row=1, col=1)
     fig.update_xaxes(title_text=display_name, row=1, col=2)
@@ -277,31 +266,35 @@ def plot_convergence(convergence_data: dict) -> go.Figure:
     paths = convergence_data["path_counts"]
     pfe = convergence_data["peak_pfe"]
     se = convergence_data["std_errors"]
-    
+
     fig = make_subplots(rows=1, cols=2,
                         subplot_titles=("Peak PFE convergence",
-                                       "Standard error"))
-    
+                                       "Standard error"),
+                        horizontal_spacing=0.15)
+
     fig.add_trace(go.Scatter(
         x=paths, y=pfe, mode="lines+markers",
         line=dict(color=COLORS["positive"], width=2),
         marker=dict(size=6), name="Peak PFE",
+        showlegend=False,
     ), row=1, col=1)
-    
+
     # Reference line (last value)
     fig.add_hline(y=pfe[-1], line_dash="dash", line_color=COLORS["neutral"],
                   row=1, col=1)
-    
+
     fig.add_trace(go.Scatter(
         x=paths, y=se, mode="lines+markers",
         line=dict(color=COLORS["secondary"], width=2),
         marker=dict(size=6), name="Std Error",
+        showlegend=False,
     ), row=1, col=2)
-    
+
     fig.update_layout(
         **LAYOUT_DEFAULTS,
         title="Monte Carlo convergence analysis",
         height=400,
+        showlegend=False,
     )
     fig.update_xaxes(title_text="Number of paths", type="log", row=1, col=1)
     fig.update_xaxes(title_text="Number of paths", type="log", row=1, col=2)
